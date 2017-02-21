@@ -96,6 +96,7 @@ def replace_line(filename, func, line_num)
   temp_file = Tempfile.new('temp_file')
   num = 0
   scope = nil
+  scope_line_num = 0
   incoming_context = nil
   child_context = nil
 
@@ -107,6 +108,7 @@ def replace_line(filename, func, line_num)
         # Entering a new function scope
         if line =~ (/func .* {|var .* func\(/)
           scope = line
+          scope_line_num = num
 
           incoming_context = find_incoming_context(line)
 
@@ -123,12 +125,11 @@ def replace_line(filename, func, line_num)
         new_line = update_line_with_context(line, func, child_context, incoming_context)
 
         # Remove { for pretty printing}
-        puts "Do you want to make the following changes? (y/n)"
-        puts "#{filename}:#{line_num}"
-        puts line
+        puts "Do you want to make the following changes inside "
+        puts "#{filename}: #{scope_line_num}:#{scope.chomp!}? (y/n)"
+        puts "#{line_num}: #{line}"
         puts "  to"
-        puts new_line
-
+        puts "#{line_num}: #{new_line}"
         print "> (y/n) : "
         guru_confirmation = $stdin.gets.chomp
         puts
