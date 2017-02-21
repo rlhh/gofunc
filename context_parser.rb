@@ -61,28 +61,109 @@ def parse_guru_result(guru)
   data
 end
 
-def replace_line(filename, func, line_num, offset_start, offset_end, not_first)
-  temp_file = Tempfile.new('foo')
-  num = 0
+def find_incoming_context(line)
+  # Example:
+  #   "func (user *Model) UpdateLegacy(ctx context.Context, serviceID string) error {"
+  #   "func UpdateLegacy(parent context.Context, serviceID string) error {"
+  line[/ \w+\((.*) context.Context,/, 1]
+end
 
-  function = ""
+def find_child_context(line)
+  # Example:
+  #   "childCtx := tracer.InsertSpanIntoContext(ctx, span)"
+  #   "ctx, cancel = context.WithTimeout(context.Background(), timeout)"
+  line[/(.*[c|C]tx).*[=|:=]/, 1]
+end
+
+def insert_context(line, func, context)
+  line.gsub("#{func}(", "#{func}(#{context}, ")
+end
+
+def update_line_with_context(line, func, child_context, incoming_context)
+  if child_context
+    # If a child context is found, propagate the child context
+    insert_context(line, func, child_context)
+  elsif incoming_context
+    # If incoming context is found, propagate it
+    insert_context(line, func, incoming_context)
+  else
+    # If no earlier context is found, create a new one
+    insert_context(line, func, "context.Background()")
+  end
+end
+
+def replace_line(filename, func, line_num)
+  temp_file = Tempfile.new('temp_file')
+  num = 0
+  scope = nil
+  incoming_context = nil
+  child_context = nil
+
   File.open(filename, 'r') do |file|
     file.each_line do |line|
 
-      if num < line_num && line.match(/func .* {|var .* func\(/)
-        function = line
+      # Only process if it has yet to reach to the relevant line
+      if num < line_num
+        # Entering a new function scope
+        if line =~ (/func .* {|var .* func\(/)
+          scope = line
+
+          incoming_context = find_incoming_context(line)
+
+          # Entering a new function scope, previous child_contexts doesn't count
+          child_context = nil
+        end
+
+        # Only find child_context if it is not already found
+        child_context ||= find_child_context(line)
       end
 
-      # Only add context.Context() if it doesn't already exist
+      # We have reached the line that needs to be replaced
       if num == line_num
-        # Remove { for pretty printing}
-        puts "Usage inside function #{function.gsub("{", "")} updated\n" if not_first
+        new_line = update_line_with_context(line, func, child_context, incoming_context)
 
-        if line !~ /context.Background()/
-          line.gsub!("#{func}(", "#{func}(context.Background(), ")
+        # Remove { for pretty printing}
+        puts "Do you want to make the following changes? (y/n)"
+        puts "#{filename}:#{line_num}"
+        puts line
+        puts "  to"
+        puts new_line
+
+        print "> (y/n) : "
+        guru_confirmation = $stdin.gets.chomp
+        puts
+
+        if guru_confirmation == 'y'
+          line = new_line
+        else
+          puts "skipping to the next result"
         end
       end
+
       temp_file.puts line
+      num += 1
+    end
+  end
+  temp_file.close
+  FileUtils.mv(temp_file.path, filename)
+ensure
+  temp_file.close
+  temp_file.unlink
+end
+
+# Replace the function itself
+def replace_function(filename, func, line_num)
+  temp_file = Tempfile.new('temp_file')
+  num = 0
+
+  File.open(filename, 'r') do |file|
+    file.each_line do |line|
+      if num == line_num
+        line = insert_context(line, func, "ctx context.Context")
+      end
+
+      temp_file.puts line
+
       num += 1
     end
   end
@@ -128,29 +209,18 @@ def main
     guru = `guru referrers #{filename}:##{offset[0]},##{offset[1]}`
     guru_results = parse_guru_result(guru)
 
+    # This is the function itself
+    first_guru_result = guru_results[0]
+
+    # Remove the first element cause it needs to be processed differently
+    guru_results.shift
+
     # Check if first, do not find function name if it is
-    self_processed = false
     guru_results.each do |guru_result|
-      puts "Do you want to update the following line with context? (y/n)"
-      puts "  #{guru_result[:path]}:#{guru_result[:location]} => #{guru_result[:text]}"
-      print "> (y/n) : "
-      guru_confirmation = $stdin.gets.chomp
-      puts
-
-      if guru_confirmation != 'y'
-        puts "skipping to the next result"
-        next
-      end
-
-      replace_line(guru_result[:path],
-                   func,
-                   (guru_result[:start_data][:line].to_i) - 1,
-                   guru_result[:start_data][:offset],
-                   guru_result[:end_data][:offset],
-                   self_processed)
-
-      self_processed = true
+      replace_line(guru_result[:path], func, guru_result[:start_data][:line] - 1)
     end
+
+    replace_function(first_guru_result[:path], func, first_guru_result[:start_data][:line] - 1)
   end
 
   puts "We are done!"
