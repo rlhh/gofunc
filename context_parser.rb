@@ -189,7 +189,7 @@ def main
   #grep -a -b -n "GetID" user.go
   grep = `grep -ban "func .* #{func}" #{filename}`
   grep_results = parse_grep_result(grep)
-
+  impacted_files = []
   # need to ask user to choose the right function
   grep_results.each do |grep_result|
     puts "Is this the correct function? (y/n)"
@@ -210,6 +210,8 @@ def main
     guru = `guru referrers #{filename}:##{offset[0]},##{offset[1]}`
     guru_results = parse_guru_result(guru)
 
+    impacted_files << guru_results.collect {|result| result[:path]}
+    
     # This is the function itself
     first_guru_result = guru_results[0]
 
@@ -223,7 +225,10 @@ def main
 
     replace_function(first_guru_result[:path], func, first_guru_result[:start_data][:line] - 1)
   end
-
+  # gofmt impacted files 
+  impacted_files.flatten.uniq.each do |file_path|
+    `gofmt -w #{file_path}`
+  end
   puts "We are done!"
 end
 
