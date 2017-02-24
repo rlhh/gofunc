@@ -1,4 +1,4 @@
-require 'pry'
+#require 'pry'
 require 'tempfile'
 require 'fileutils'
 
