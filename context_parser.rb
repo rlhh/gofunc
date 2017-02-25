@@ -153,7 +153,7 @@ ensure
 end
 
 # Replace the function itself
-def replace_function(filename, func, line_num)
+def replace_function(filename, func, line_num, name_type)
   temp_file = Tempfile.new('temp_file')
   num = 0
 
@@ -163,13 +163,15 @@ def replace_function(filename, func, line_num)
         line = insert_context(line, func, "ctx context.Context")
         temp_file.puts line
 
-        puts "Create span in #{func}?"
-        print "> (y/n) : "
-        span_confirmation = $stdin.gets.chomp
-        puts
+        if name_type == 'function'
+          puts "Create span in #{func}?"
+          print "> (y/n) : "
+          span_confirmation = $stdin.gets.chomp
+          puts
 
-        if span_confirmation == 'y'
-          temp_file.puts "\tspan, _ := tracer.CreateSpanFromContext(ctx, logTag+\".#{func}\")\n\tdefer span.Finish()\n"
+          if span_confirmation == 'y'
+            temp_file.puts "\tspan, _ := tracer.CreateSpanFromContext(ctx, logTag+\".#{func}\")\n\tdefer span.Finish()\n"
+           end
         end
       else
         temp_file.puts line
@@ -213,7 +215,7 @@ def main
   impacted_files = []
   # need to ask user to choose the right function
   grep_results.each do |grep_result|
-    puts "Is this the correct #{name_type}? (y/n)"
+    puts "Is this the correct function? (y/n)"
     puts "  #{grep_result[:line]} => #{grep_result[:text]}"
     print "> (y/n) : "
     grep_confirmation = $stdin.gets.chomp
@@ -244,13 +246,7 @@ def main
       replace_line(guru_result[:path], name, guru_result[:start_data][:line] - 1)
     end
 
-    if name_type == 'function'
-      replace_function(first_guru_result[:path], name, first_guru_result[:start_data][:line] - 1)
-    end
-
-    if name_type == 'interface'
-      # find function that implements interface
-    end
+    replace_function(first_guru_result[:path], name, first_guru_result[:start_data][:line] - 1, name_type)
   end
   # gofmt impacted files 
   impacted_files.flatten.uniq.each do |file_path|
