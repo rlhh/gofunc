@@ -76,7 +76,7 @@ def find_child_context(line)
 end
 
 def insert_context(line, func, context)
-  line.gsub("#{func}(", "#{func}(#{context}, ")
+  line.gsub("#{func}(", "#{func}(#{context.strip}, ")
 end
 
 def update_line_with_context(line, func, child_context, incoming_context)
@@ -161,9 +161,19 @@ def replace_function(filename, func, line_num)
     file.each_line do |line|
       if num == line_num
         line = insert_context(line, func, "ctx context.Context")
-      end
+        temp_file.puts line
 
-      temp_file.puts line
+        puts "Create span in #{func}?"
+        print "> (y/n) : "
+        span_confirmation = $stdin.gets.chomp
+        puts
+
+        if span_confirmation == 'y'
+          temp_file.puts "\tspan, _ := tracer.CreateSpanFromContext(ctx, logTag+\".#{func}\")\n\tdefer span.Finish()\n"
+        end
+      else
+        temp_file.puts line
+      end
 
       num += 1
     end
@@ -180,19 +190,30 @@ def main
   # func = "LoadByID"
 
   filename = ARGV[0]
-  func = ARGV[1]
+  name = ARGV[1]
+  name_type = ARGV[2]
 
-  if ARGV.size != 2
-    puts "usage: ruby context_parser.rb <full_path_filename> <function_name>"
+  if ARGV.size != 3
+    puts "usage: ruby context_parser.rb <full_path_filename> <name> <name_type>"
+  end
+
+  grep_str = ""
+  if name_type == 'function'
+    grep_str = "func .* #{name}"
+  elsif name_type == 'interface'
+    grep_str = "#{name}("
+  else
+    puts "name_type not supported"
+    exit
   end
 
   #grep -a -b -n "GetID" user.go
-  grep = `grep -ban "func .* #{func}" #{filename}`
+  grep = `grep -ban -e "#{grep_str}" #{filename}`
   grep_results = parse_grep_result(grep)
 
   # need to ask user to choose the right function
   grep_results.each do |grep_result|
-    puts "Is this the correct function? (y/n)"
+    puts "Is this the correct #{name_type}? (y/n)"
     puts "  #{grep_result[:line]} => #{grep_result[:text]}"
     print "> (y/n) : "
     grep_confirmation = $stdin.gets.chomp
@@ -204,7 +225,7 @@ def main
     end
 
     result = grep_result
-    offset = calculate_offset(result[:text], func, result[:line_offset])
+    offset = calculate_offset(result[:text], name, result[:line_offset])
 
     #guru referrers user.go:#2072,#2080
     guru = `guru referrers #{filename}:##{offset[0]},##{offset[1]}`
@@ -218,10 +239,16 @@ def main
 
     # Check if first, do not find function name if it is
     guru_results.each do |guru_result|
-      replace_line(guru_result[:path], func, guru_result[:start_data][:line] - 1)
+      replace_line(guru_result[:path], name, guru_result[:start_data][:line] - 1)
     end
 
-    replace_function(first_guru_result[:path], func, first_guru_result[:start_data][:line] - 1)
+    if name_type == 'function'
+      replace_function(first_guru_result[:path], name, first_guru_result[:start_data][:line] - 1)
+    end
+
+    if name_type == 'interface'
+      # find function that implements interface
+    end
   end
 
   puts "We are done!"
