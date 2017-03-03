@@ -250,7 +250,10 @@ def main
   end
   # gofmt impacted files 
   impacted_files.flatten.uniq.each do |file_path|
-    `gofmt -w #{file_path}`
+    `gofmt -s -w #{file_path}`
+    `goimports -w #{file_path}`
+    # -i '' is required when running on mac because it uses the BSD version of sed
+    `sed -i '' 's/"context"/"golang.org\/x\/net\/context"/' legacy.go`
   end
   puts "We are done!"
 end
