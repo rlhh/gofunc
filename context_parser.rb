@@ -201,21 +201,21 @@ def main
 
   grep_str = ""
   if name_type == 'function'
-    grep_str = "func .* #{name}"
+    grep_str = "\"func .* #{name}(\" -e \"var #{name} = func(\""
   elsif name_type == 'interface'
-    grep_str = "#{name}("
+    grep_str = "^\\s#{name}("
   else
     puts "name_type not supported"
     exit
   end
 
   #grep -a -b -n "GetID" user.go
-  grep = `grep -ban -e "#{grep_str}" #{filename}`
+  grep = `grep -ban -e #{grep_str} #{filename}`
   grep_results = parse_grep_result(grep)
   impacted_files = []
   # need to ask user to choose the right function
   grep_results.each do |grep_result|
-    puts "Is this the correct function? (y/n)"
+    puts "Is this the correct #{name_type}? (y/n)"
     puts "  #{grep_result[:line]} => #{grep_result[:text]}"
     print "> (y/n) : "
     grep_confirmation = $stdin.gets.chomp
@@ -253,7 +253,7 @@ def main
     `gofmt -s -w #{file_path}`
     `goimports -w #{file_path}`
     # -i '' is required when running on mac because it uses the BSD version of sed
-    `sed -i '' 's/"context"/"golang.org\/x\/net\/context"/' legacy.go`
+    `sed -i '' 's/\\"context\\"/\\"golang.org\\/x\\/net\\/context\\"/' #{file_path}`
   end
   puts "We are done!"
 end
