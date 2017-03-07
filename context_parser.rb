@@ -76,7 +76,17 @@ def find_child_context(line)
 end
 
 def insert_context(line, func, context)
-  line.gsub("#{func}(", "#{func}(#{context.strip}, ")
+  # If this line is a normal function call
+  if line.match("#{func}\\(")
+    line = line.gsub("#{func}(", "#{func}(#{context.strip}, ")
+  # If this line is a function reassignment
+  elsif line.match("#{func} = func\\(")
+    line = line.gsub("#{func} = func(", "#{func} = func(ctx context.Context, ")
+  end
+
+  # TODO: This can be optimized
+  # If no parameter follows the context parameter, remove the comma and blank space
+  line.gsub(", )", ")")
 end
 
 def update_line_with_context(line, func, child_context, incoming_context)
