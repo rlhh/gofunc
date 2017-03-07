@@ -1,4 +1,4 @@
-#require 'pry'
+# require 'pry'
 require 'tempfile'
 require 'fileutils'
 
@@ -19,13 +19,14 @@ def parse_grep_result(grep_result)
 end
 
 def calculate_offset(text, func, line_offset)
-  match_data = text.match(func)
+  match_data = text.match("\s#{func}")
 
   if match_data
     offset_data = match_data.offset(0)
   end
 
-  offset_data[0] += line_offset
+  # Add one to offset the space
+  offset_data[0] += line_offset + 1
   offset_data[1] += line_offset
 
   offset_data
@@ -105,7 +106,7 @@ end
 def replace_line(filename, func, line_num)
   temp_file = Tempfile.new('temp_file')
   num = 0
-  scope = nil
+  scope = ""
   scope_line_num = 0
   incoming_context = nil
   child_context = nil
@@ -244,7 +245,7 @@ def main
     guru_results = parse_guru_result(guru)
 
     impacted_files << guru_results.collect {|result| result[:path]}
-    
+
     # This is the function itself
     first_guru_result = guru_results[0]
 
