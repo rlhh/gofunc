@@ -264,6 +264,8 @@ def main
     `goimports -w #{file_path}`
     # -i '' is required when running on mac because it uses the BSD version of sed
     `sed -i '' 's/\\"context\\"/\\"golang.org\\/x\\/net\\/context\\"/' #{file_path}`
+    # perform another import to fix the arrangement of the imports
+    `goimports -w #{file_path}`
   end
   puts "We are done!"
 end
