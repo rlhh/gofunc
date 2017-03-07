@@ -211,9 +211,9 @@ def main
 
   grep_str = ""
   if name_type == 'function'
-    grep_str = "\"func .* #{name}(\" -e \"var #{name} = func(\""
+    grep_str = "\"func .*#{name}(\" -e \"var #{name} = func(\""
   elsif name_type == 'interface'
-    grep_str = "^\\s#{name}("
+    grep_str = "\"^\\s#{name}(\""
   else
     puts "name_type not supported"
     exit
