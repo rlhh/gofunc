@@ -18,7 +18,21 @@ def parse_grep_result(grep_result)
   data
 end
 
-def calculate_offset(text, func, line_offset)
+def calculate_interface_offset(text, func, line_offset)
+  match_data = text.match("#{func}")
+
+  if match_data
+    offset_data = match_data.offset(0)
+  end
+
+  # Add one to offset the space
+  offset_data[0] += line_offset + 1
+  offset_data[1] += line_offset
+
+  offset_data
+end
+
+def calculate_function_offset(text, func, line_offset)
   match_data = text.match("\s#{func}")
 
   if match_data
@@ -225,9 +239,9 @@ def main
   grep_results = parse_grep_result(grep)
   impacted_files = []
   # need to ask user to choose the right function
-  grep_results.each do |grep_result|
+  grep_results.each do |result|
     puts "Is this the correct #{name_type}? (y/n)"
-    puts "  #{grep_result[:line]} => #{grep_result[:text]}"
+    puts "  #{result[:line]} => #{result[:text]}"
     print "> (y/n) : "
     grep_confirmation = $stdin.gets.chomp
     puts
@@ -237,8 +251,14 @@ def main
       next
     end
 
-    result = grep_result
-    offset = calculate_offset(result[:text], name, result[:line_offset])
+    if name_type == 'function'
+      offset = calculate_function_offset(result[:text], name, result[:line_offset])
+    elsif name_type == 'interface'
+      offset = calculate_interface_offset(result[:text], name, result[:line_offset])
+    else
+      puts "name_type not supported"
+      exit
+    end
 
     #guru referrers user.go:#2072,#2080
     guru = `guru referrers #{filename}:##{offset[0]},##{offset[1]}`
