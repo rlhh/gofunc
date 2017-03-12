@@ -79,11 +79,15 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 		case ast.Decl:
 			declNode := node.(ast.Decl)
 			if declNode != nil {
-				funcDeclNode, ok := declNode.(*ast.FuncDecl)
-				if ok {
-					fmt.Printf("funcDecl: %v \n", funcDeclNode)
-					fmt.Printf("  funcBody: %v \n", funcDeclNode.Body)
-				}
+				// For printing out the function and the body of a normal function declaration
+				//funcDeclNode, ok := declNode.(*ast.FuncDecl)
+				//if ok {
+				//fmt.Printf("funcDecl: %v \n", funcDeclNode)
+				//for _, body := range funcDeclNode.Body.List {
+				//fmt.Printf("  funcBody: %v \n", body)
+
+				//}
+				//}
 
 				genDeclNode, ok := declNode.(*ast.GenDecl)
 				if ok && genDeclNode.Tok == token.VAR {
@@ -92,17 +96,25 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 					for _, v1 := range genDeclNode.Specs {
 						for _, v2 := range v1.(*ast.ValueSpec).Values {
-							t := v.info.TypeOf(v2)
-							fmt.Printf("  genDeclType: %v\n", t)
-							signatureType, ok := t.Underlying().(*types.Signature)
-							if ok {
-								tuples := signatureType.Params()
-								tuplesLen := tuples.Len()
-								for i := 0; i < tuplesLen; i++ {
-									fmt.Printf("    params: %v \n", tuples.At(i))
+							// To print out the function signature
+							genDeclT := v.info.TypeOf(v2)
+							fmt.Printf("  genDeclExpr: %v\n", genDeclT)
 
+							// To print out body of a variable function type function
+							funcLit, ok := v2.(*ast.FuncLit)
+							if ok {
+								for _, body := range funcLit.Body.List {
+									fmt.Printf("    genDeclFuncBody: %v\n", body)
 								}
 							}
+							// To print out type of each param of the function signature
+							//signatureType, ok := t.Underlying().(*types.Signature)
+							//if ok {
+							//	tuples := signatureType.Params()
+							//	tuplesLen := tuples.Len()
+							//	for i := 0; i < tuplesLen; i++ {
+							//		fmt.Printf("    params: %v \n", tuples.At(i))
+							//	}
 						}
 					}
 				}
