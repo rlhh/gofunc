@@ -71,28 +71,28 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 	if node != nil {
 		switch node.(type) {
 		case ast.Expr:
-			exprNode := node.(ast.Expr)
-			t := v.info.TypeOf(exprNode)
-			if t != nil && t.String() == "github.com/myteksi/go/vendor/golang.org/x/net/context.Context" {
-				//position := v.tFSet.Position(node.Pos())
-				//fmt.Printf("%v:%v : %v : %s", position.Line, position.Offset, exprNode, reflect.TypeOf(node).String())
-				//fmt.Printf(" : %s", t.String())
-				//fmt.Println()
+			//exprNode := node.(ast.Expr)
+			//t := v.info.TypeOf(exprNode)
+			//if t != nil && t.String() == "github.com/myteksi/go/vendor/golang.org/x/net/context.Context" {
+			//position := v.tFSet.Position(node.Pos())
+			//fmt.Printf("%v:%v : %v : %s", position.Line, position.Offset, exprNode, reflect.TypeOf(node).String())
+			//fmt.Printf(" : %s", t.String())
+			//fmt.Println()
 
-				// prints out context.Background()
-				//callExpr, ok := exprNode.(*ast.CallExpr)
-				//if ok {
-				//fmt.Printf("  lastSeenContext: %v \n", v.contexts)
-				//fmt.Printf("  callExpr: %v %v \n", callExpr.Fun, callExpr.Args)
-				//	node = v.contexts[len(v.contexts)-1]
-				//}
+			// prints out context.Background()
+			//callExpr, ok := exprNode.(*ast.CallExpr)
+			//if ok {
+			//fmt.Printf("  lastSeenContext: %v \n", v.contexts)
+			//fmt.Printf("  callExpr: %v %v \n", callExpr.Fun, callExpr.Args)
+			//	node = v.contexts[len(v.contexts)-1]
+			//}
 
-				//identCtx, ok := node.(*ast.Ident)
-				//if ok {
-				//fmt.Printf(" LastCtx: %v: %v\n", position.Line, position.Offset)
-				//v.contexts = append(v.contexts, identCtx)
-				//}
-			}
+			//identCtx, ok := node.(*ast.Ident)
+			//if ok {
+			//fmt.Printf(" LastCtx: %v: %v\n", position.Line, position.Offset)
+			//v.contexts = append(v.contexts, identCtx)
+			//}
+			//}
 		case ast.Decl:
 			declNode := node.(ast.Decl)
 			if declNode != nil {
@@ -134,6 +134,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
 				}
 			}
+
 		case ast.Stmt:
 			astNode := node.(ast.Stmt)
 			// Only interested in AssignStmt
@@ -142,20 +143,45 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				break
 			}
 
-			// Only interested in Func calls
-			assignCallExpr, ok := assignStmt.Rhs[0].(*ast.CallExpr)
-			if !ok {
-				break
-			}
-
-			v.hasContextArg(assignCallExpr.Args)
+			fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
+			fmt.Printf("  Processing LHS\n")
+			v.assignStmtLHS(assignStmt.Lhs)
+			fmt.Printf("  Processing RHS\n")
+			v.assignStmtRHS(assignStmt.Rhs)
 		}
 	}
 	return v
 }
 
+// Process LHS to see if a new context is created
+func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) {
+	for _, lhs := range assignStmtLHS {
+		lhsIdent := lhs.(*ast.Ident)
+
+		matched := v.isNetContextType(lhsIdent)
+		if matched {
+			v.contexts = append(v.contexts, lhsIdent)
+		}
+	}
+}
+
+// Process RHS to see if context is used
+func (v *PrintASTVisitor) assignStmtRHS(assignStmtRHS []ast.Expr) {
+	// Only interested in Func calls
+	assignCallExpr, ok := assignStmtRHS[0].(*ast.CallExpr)
+	if !ok {
+		return
+	}
+
+	v.hasContextArg(assignCallExpr.Args)
+}
+
 // Check if a context.Context is passed in as a param
+// This only works properly (has been tested) when there's only one single variable defined
+//   Works: ctx context.Context
+//   Does Not Work: ctx1, ctx2 context.Context
 func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
+	v.contexts = []*ast.Ident{}
 	for _, p := range params {
 		selectorExpr := p.Type.(*ast.SelectorExpr)
 		xIdent := selectorExpr.X.(*ast.Ident)
@@ -163,13 +189,14 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 
 		matched := v.isNetContextType(xIdent)
 		if matched {
-			v.contexts = append(v.contexts, xIdent)
-			fmt.Printf(" Context Param Type: %v %v\n", p.Names, selIdent)
+			v.contexts = append(v.contexts, p.Names[0])
+			fmt.Printf(" Context Param Type: %v %v\n", p.Names[0], selIdent)
 		}
 	}
 }
 
 // Check if a context type is part of the argument to the function call
+// TODO: Handle AssignStmt can be nested inside another AssignStmt
 func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 	for _, a := range args {
 
@@ -179,13 +206,31 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 			aCallExpr := a.(*ast.CallExpr)
 
 			selectorExpr = aCallExpr.Fun.(*ast.SelectorExpr)
-
 		case *ast.Ident:
 			aIdent := a.(*ast.Ident)
 
-			aFieldType := aIdent.Obj.Decl.(*ast.Field).Type
+			switch aIdent.Obj.Decl.(type) {
+			case *ast.Field:
+				aFieldType := aIdent.Obj.Decl.(*ast.Field).Type
 
-			selectorExpr = aFieldType.(*ast.SelectorExpr)
+				selectorExpr = aFieldType.(*ast.SelectorExpr)
+			case *ast.AssignStmt:
+				// This can happen when Go inlines code for cases like
+				//  childCtx := context.WithValue(ctx, "abc", 123)
+				//  err := VerifyRecoveryToken(childCtx)
+				// gets converted something like
+				//  err := VerifyRecoveryToken(childCtx := context.WithValue(ctx, "abc", 123))
+				// in the AST
+				//
+				// We assume that this is procssed in the Visit loop
+				continue
+			default:
+				fmt.Printf("unhandled hasContextArg check in *ast.Ident: Type: %#v\n", a)
+				continue
+			}
+
+		default:
+			continue
 		}
 
 		xIdent := selectorExpr.X.(*ast.Ident)
@@ -193,19 +238,33 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 
 		matched := v.isNetContextType(xIdent)
 		if matched {
-			fmt.Printf("\n Possible Parent ctx %v\n", v.contexts)
-			fmt.Printf(" Context Arg Type: %v\n", selIdent)
+			fmt.Printf("  Possible Parent ctx: %v\n", v.contexts)
+			fmt.Printf("  Context Arg Type: %v\n", selIdent)
+
+			// Only perform replacement if this is a context.Background()
+			//if selIdent.Name == "Background" {
+			//	args[idx] = v.contexts[len(v.contexts)-1]
+			//}
 		}
 	}
 }
 
-func (v *PrintASTVisitor) isNetContextType(xIdent *ast.Ident) bool {
-	xIdentInfo := v.info.ObjectOf(xIdent)
-	contextPkg := xIdentInfo.Parent().Lookup("context")
-	contextPkgName := contextPkg.(*types.PkgName)
+func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
+	identInfo := v.info.ObjectOf(ident)
 
-	matched, _ := regexp.MatchString("golang.org/x/net/context", contextPkgName.Imported().Path())
+	var matched bool
+	switch identInfo.(type) {
+	case *types.PkgName:
+		contextPkg := identInfo.Parent().Lookup("context")
+		contextPkgName := contextPkg.(*types.PkgName)
 
+		matched, _ = regexp.MatchString("golang.org/x/net/context", contextPkgName.Imported().Path())
+	case *types.Var:
+		def := v.info.Defs[ident]
+
+		// A plain string check is not ideal but it is the easiest
+		matched, _ = regexp.MatchString("golang.org/x/net/context", def.Type().String())
+	}
 	return matched
 }
 
