@@ -10,7 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"log"
-	"regexp"
+	"strings"
 )
 
 func main() {
@@ -51,6 +51,14 @@ func main() {
 	fmt.Printf("types.Config.Check got %v\n", pkg.String())
 
 	for _, f := range astf {
+		fileName := fset.Position(f.Pos()).Filename
+
+		// Skip all tests files
+		if strings.HasSuffix(fileName, "_test.go") {
+			continue
+		}
+		fmt.Printf("File: %v\n")
+
 		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
 
 		//var buf bytes.Buffer
@@ -161,7 +169,12 @@ func (v *PrintASTVisitor) assignStmtRHS(assignStmtRHS []ast.Expr) {
 func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 	v.contexts = []*ast.Ident{}
 	for _, p := range params {
-		selectorExpr := p.Type.(*ast.SelectorExpr)
+		selectorExpr, ok := p.Type.(*ast.SelectorExpr)
+		// All context params are selectorExpr
+		if !ok {
+			continue
+		}
+
 		xIdent := selectorExpr.X.(*ast.Ident)
 		selIdent := selectorExpr.Sel
 
@@ -179,12 +192,16 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 	for _, a := range args {
 
 		var ident *ast.Ident
-		var selectorExpr *ast.SelectorExpr
 		switch a.(type) {
 		case *ast.CallExpr:
 			aCallExpr := a.(*ast.CallExpr)
 
-			selectorExpr = aCallExpr.Fun.(*ast.SelectorExpr)
+			selectorExpr, ok := aCallExpr.Fun.(*ast.SelectorExpr)
+			// All context params are selectorExpr
+			if !ok {
+				continue
+			}
+
 			ident = selectorExpr.X.(*ast.Ident)
 		case *ast.Ident:
 			ident = a.(*ast.Ident)
@@ -207,29 +224,31 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
 	identInfo := v.info.ObjectOf(ident)
 
-	var matched bool
+	var pkgStr string
 	switch identInfo.(type) {
 	case *types.PkgName:
 		contextPkg := identInfo.Parent().Lookup("context")
 		contextPkgName := contextPkg.(*types.PkgName)
 
-		matched, _ = regexp.MatchString("golang.org/x/net/context", contextPkgName.Imported().Path())
+		pkgStr = contextPkgName.Imported().Path()
 	case *types.Var:
 		// This can be either a definition or use of an existing definition
 
 		def := v.info.Defs[ident]
 		if def != nil {
 			// A plain string check is not ideal but it is the easiest
-			matched, _ = regexp.MatchString("golang.org/x/net/context", def.Type().String())
+			pkgStr = def.Type().String()
 			break
 		}
 
 		defType := v.info.Types[ident]
 		if defType.Type != nil {
 			// A plain string check is not ideal but it is the easiest
-			matched, _ = regexp.MatchString("golang.org/x/net/context", defType.Type.String())
+			pkgStr = defType.Type.String()
 		}
 	}
+
+	matched := strings.HasSuffix(pkgStr, "golang.org/x/net/context")
 
 	return matched
 }
