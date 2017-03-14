@@ -3,12 +3,10 @@ package main
 //credits: https://gist.github.com/cxwangyi/e1887879dcaa750e5469
 
 import (
-	"bytes"
 	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
-	"go/printer"
 	"go/token"
 	"go/types"
 	"log"
@@ -55,10 +53,10 @@ func main() {
 	for _, f := range astf {
 		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
 
-		var buf bytes.Buffer
-		printer.Fprint(&buf, fset, f)
-		fmt.Println(buf.String())
-		//ast.Print(fset, rewritten)
+		//var buf bytes.Buffer
+		//printer.Fprint(&buf, fset, f)
+		//fmt.Println(buf.String())
+		//ast.Print(fset, f)
 	}
 }
 
@@ -105,8 +103,8 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					funcDeclT := v.info.ObjectOf(funcDecl.Name)
 					fmt.Printf("funcDecl: %v \n", funcDeclT)
 
-					printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
 					v.hasContextParam(funcDecl.Type.Params.List)
+					printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
 
 				case *ast.GenDecl:
 					genDeclNode := declNode.(*ast.GenDecl)
@@ -171,24 +169,30 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 	}
 }
 
-// Check if context.* is part of the argument to the function call
-// This only checks for selector type context arg (context.Background(), context.WithValue(...))
+// Check if a context type is part of the argument to the function call
 func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 	for _, a := range args {
-		aCallExpr, ok := a.(*ast.CallExpr)
 
-		// This can be *ast.Ident, not *ast.CallExpr
-		if !ok {
-			continue
+		var selectorExpr *ast.SelectorExpr
+		switch a.(type) {
+		case *ast.CallExpr:
+			aCallExpr := a.(*ast.CallExpr)
+
+			selectorExpr = aCallExpr.Fun.(*ast.SelectorExpr)
+
+		case *ast.Ident:
+			aIdent := a.(*ast.Ident)
+
+			aFieldType := aIdent.Obj.Decl.(*ast.Field).Type
+
+			selectorExpr = aFieldType.(*ast.SelectorExpr)
 		}
 
-		selectorExpr := aCallExpr.Fun.(*ast.SelectorExpr)
 		xIdent := selectorExpr.X.(*ast.Ident)
 		selIdent := selectorExpr.Sel
 
 		matched := v.isNetContextType(xIdent)
 		if matched {
-
 			fmt.Printf("\n Possible Parent ctx %v\n", v.contexts)
 			fmt.Printf(" Context Arg Type: %v\n", selIdent)
 		}
