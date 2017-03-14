@@ -70,29 +70,6 @@ type PrintASTVisitor struct {
 func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 	if node != nil {
 		switch node.(type) {
-		case ast.Expr:
-			//exprNode := node.(ast.Expr)
-			//t := v.info.TypeOf(exprNode)
-			//if t != nil && t.String() == "github.com/myteksi/go/vendor/golang.org/x/net/context.Context" {
-			//position := v.tFSet.Position(node.Pos())
-			//fmt.Printf("%v:%v : %v : %s", position.Line, position.Offset, exprNode, reflect.TypeOf(node).String())
-			//fmt.Printf(" : %s", t.String())
-			//fmt.Println()
-
-			// prints out context.Background()
-			//callExpr, ok := exprNode.(*ast.CallExpr)
-			//if ok {
-			//fmt.Printf("  lastSeenContext: %v \n", v.contexts)
-			//fmt.Printf("  callExpr: %v %v \n", callExpr.Fun, callExpr.Args)
-			//	node = v.contexts[len(v.contexts)-1]
-			//}
-
-			//identCtx, ok := node.(*ast.Ident)
-			//if ok {
-			//fmt.Printf(" LastCtx: %v: %v\n", position.Line, position.Offset)
-			//v.contexts = append(v.contexts, identCtx)
-			//}
-			//}
 		case ast.Decl:
 			declNode := node.(ast.Decl)
 			if declNode != nil {
@@ -238,8 +215,9 @@ func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
 
 		matched, _ = regexp.MatchString("golang.org/x/net/context", contextPkgName.Imported().Path())
 	case *types.Var:
-		def := v.info.Defs[ident]
+		// This can be either a definition or use of an existing definition
 
+		def := v.info.Defs[ident]
 		if def != nil {
 			// A plain string check is not ideal but it is the easiest
 			matched, _ = regexp.MatchString("golang.org/x/net/context", def.Type().String())
