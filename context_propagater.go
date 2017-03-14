@@ -144,10 +144,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 			}
 
 			fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
-			fmt.Printf("  Processing LHS\n")
-			v.assignStmtLHS(assignStmt.Lhs)
 			fmt.Printf("  Processing RHS\n")
 			v.assignStmtRHS(assignStmt.Rhs)
+
+			fmt.Printf("  Processing LHS\n")
+			v.assignStmtLHS(assignStmt.Lhs)
 		}
 	}
 	return v
@@ -200,46 +201,23 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 	for _, a := range args {
 
+		var ident *ast.Ident
 		var selectorExpr *ast.SelectorExpr
 		switch a.(type) {
 		case *ast.CallExpr:
 			aCallExpr := a.(*ast.CallExpr)
 
 			selectorExpr = aCallExpr.Fun.(*ast.SelectorExpr)
+			ident = selectorExpr.X.(*ast.Ident)
 		case *ast.Ident:
-			aIdent := a.(*ast.Ident)
-
-			switch aIdent.Obj.Decl.(type) {
-			case *ast.Field:
-				aFieldType := aIdent.Obj.Decl.(*ast.Field).Type
-
-				selectorExpr = aFieldType.(*ast.SelectorExpr)
-			case *ast.AssignStmt:
-				// This can happen when Go inlines code for cases like
-				//  childCtx := context.WithValue(ctx, "abc", 123)
-				//  err := VerifyRecoveryToken(childCtx)
-				// gets converted something like
-				//  err := VerifyRecoveryToken(childCtx := context.WithValue(ctx, "abc", 123))
-				// in the AST
-				//
-				// We assume that this is procssed in the Visit loop
-				continue
-			default:
-				fmt.Printf("unhandled hasContextArg check in *ast.Ident: Type: %#v\n", a)
-				continue
-			}
-
+			ident = a.(*ast.Ident)
 		default:
 			continue
 		}
 
-		xIdent := selectorExpr.X.(*ast.Ident)
-		selIdent := selectorExpr.Sel
-
-		matched := v.isNetContextType(xIdent)
+		matched := v.isNetContextType(ident)
 		if matched {
-			fmt.Printf("  Possible Parent ctx: %v\n", v.contexts)
-			fmt.Printf("  Context Arg Type: %v\n", selIdent)
+			fmt.Printf("  Found other Context values in the same scope as %v. Other possible contexts %v\n", ident, v.contexts)
 
 			// Only perform replacement if this is a context.Background()
 			//if selIdent.Name == "Background" {
@@ -262,9 +240,19 @@ func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
 	case *types.Var:
 		def := v.info.Defs[ident]
 
-		// A plain string check is not ideal but it is the easiest
-		matched, _ = regexp.MatchString("golang.org/x/net/context", def.Type().String())
+		if def != nil {
+			// A plain string check is not ideal but it is the easiest
+			matched, _ = regexp.MatchString("golang.org/x/net/context", def.Type().String())
+			break
+		}
+
+		defType := v.info.Types[ident]
+		if defType.Type != nil {
+			// A plain string check is not ideal but it is the easiest
+			matched, _ = regexp.MatchString("golang.org/x/net/context", defType.Type.String())
+		}
 	}
+
 	return matched
 }
 
