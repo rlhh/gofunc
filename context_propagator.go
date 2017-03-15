@@ -12,6 +12,7 @@ import (
 	"go/types"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -82,7 +83,19 @@ type PrintASTVisitor struct {
 	tFSet    *token.FileSet
 	astf     *ast.File
 	info     *types.Info
-	contexts []*ast.Ident
+	contexts []*contextInfo
+}
+
+type contextInfo struct {
+	ident   *ast.Ident
+	foundAt string
+}
+
+func (v *PrintASTVisitor) PrintPossibleContext() {
+	fmt.Println(" Earlier context values are:")
+	for idx, contextInfo := range v.contexts {
+		fmt.Printf("  %v:\n   %v =>\n    %v\n", idx, contextInfo.ident, contextInfo.foundAt)
+	}
 }
 
 func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
@@ -93,9 +106,21 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 			if declNode != nil {
 				switch declNode.(type) {
 				case *ast.FuncDecl:
+					// Entering new scope, reset context records
+					v.contexts = []*contextInfo{}
+
 					funcDecl := declNode.(*ast.FuncDecl)
 
-					v.hasContextParam(funcDecl.Type.Params.List)
+					contextAtParams := v.hasContextParam(funcDecl.Type.Params.List)
+
+					// TODO: Extract these to a method and reuse it
+					for _, contextAt := range contextAtParams {
+						foundAt := fmt.Sprintf("Parameter for %v\n", funcDecl.Name.String())
+						v.contexts = append(v.contexts, &contextInfo{
+							ident:   contextAt,
+							foundAt: foundAt,
+						})
+					}
 
 					//funcDeclT := v.info.ObjectOf(funcDecl.Name)
 					//fmt.Printf("funcDecl: %v \n", funcDeclT)
@@ -103,6 +128,9 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					//printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
 
 				case *ast.GenDecl:
+					// Entering new scope, reset context records
+					v.contexts = []*contextInfo{}
+
 					genDeclNode := declNode.(*ast.GenDecl)
 
 					// We are only interested if this is a var declaration (var * = func....)
@@ -126,7 +154,17 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					//genDeclT := v.info.TypeOf(val)
 					//fmt.Printf("genDecl: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
 
-					v.hasContextParam(funcLit.Type.Params.List)
+					contextAtParams := v.hasContextParam(funcLit.Type.Params.List)
+					var buf bytes.Buffer
+					printer.Fprint(&buf, v.tFSet, node)
+					genDeclStr := buf.String()
+
+					for _, contextAt := range contextAtParams {
+						v.contexts = append(v.contexts, &contextInfo{
+							ident:   contextAt,
+							foundAt: genDeclStr,
+						})
+					}
 					//printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
 				}
 			}
@@ -139,20 +177,35 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				break
 			}
 
-			fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
+			var buf bytes.Buffer
+			printer.Fprint(&buf, v.tFSet, node)
+			assignStmtStr := buf.String()
+
+			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmtStr)
 			//fmt.Printf("  Processing RHS\n")
-			v.assignStmtRHS(assignStmt.Rhs)
+			v.assignStmtRHS(node, assignStmt.Rhs)
 
 			//fmt.Printf("  Processing LHS\n")
-			v.assignStmtLHS(assignStmt.Lhs)
+			contextAtLhs := v.assignStmtLHS(assignStmt.Lhs)
+			for _, contextIdx := range contextAtLhs {
+				contextIdent := assignStmt.Lhs[contextIdx].(*ast.Ident)
+
+				v.contexts = append(v.contexts, &contextInfo{
+					ident:   contextIdent,
+					foundAt: assignStmtStr,
+				})
+			}
 		}
 	}
 	return v
 }
 
 // Process LHS to see if a new context is created
-func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) {
-	for _, lhs := range assignStmtLHS {
+// returns the location of context in the expr list
+func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) []int {
+	contextAt := []int{}
+
+	for idx, lhs := range assignStmtLHS {
 		lhsIdent, ok := lhs.(*ast.Ident)
 		// context should not be embedded
 		// IMPROVE: Maybe allow it to be
@@ -162,28 +215,32 @@ func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) {
 
 		matched := v.isNetContextType(lhsIdent)
 		if matched {
-			v.contexts = append(v.contexts, lhsIdent)
+			contextAt = append(contextAt, idx)
 		}
 	}
+
+	return contextAt
 }
 
 // Process RHS to see if context is used
-func (v *PrintASTVisitor) assignStmtRHS(assignStmtRHS []ast.Expr) {
+func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr) {
 	// Only interested in Func calls
 	assignCallExpr, ok := assignStmtRHS[0].(*ast.CallExpr)
 	if !ok {
 		return
 	}
 
-	v.hasContextArg(assignCallExpr.Args)
+	v.hasContextArg(node, assignCallExpr.Args)
 }
 
 // Check if a context.Context is passed in as a param
 // This only works properly (has been tested) when there's only one single variable defined
 //   Works: ctx context.Context
 //   Does Not Work: ctx1, ctx2 context.Context
-func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
-	v.contexts = []*ast.Ident{}
+// returns the location of context in the field list
+func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) []*ast.Ident {
+	contexts := []*ast.Ident{}
+
 	for _, p := range params {
 		selectorExpr, ok := p.Type.(*ast.SelectorExpr)
 		// All context params are selectorExpr
@@ -194,19 +251,19 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 		xIdent := selectorExpr.X.(*ast.Ident)
 		matched := v.isNetContextType(xIdent)
 		if matched {
-			v.contexts = append(v.contexts, p.Names[0])
-
+			contexts = append(contexts, xIdent)
 			// selIdent := selectorExpr.Sel
 			// fmt.Printf(" Context Param Type: %v %v\n", p.Names[0], selIdent)
 		}
 	}
+
+	return contexts
 }
 
 // Check if a context type is part of the argument to the function call
 // TODO: Handle AssignStmt can be nested inside another AssignStmt
-func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
+func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 	for idx, a := range args {
-
 		var ident *ast.Ident
 		switch a.(type) {
 		case *ast.CallExpr:
@@ -220,22 +277,43 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 		default:
 			continue
 		}
-		fmt.Printf(" ident: %v\n", ident)
 
 		matched := v.isNetContextType(ident)
 		if matched {
-			// TODO: Print out the whole line, otherwise it's hard to tell
-			fmt.Printf("  Found other Context values in the same scope as %#v. Other possible contexts %v\n", ident, v.contexts)
+			var buf bytes.Buffer
+			printer.Fprint(&buf, v.tFSet, node)
+			nodeStr := buf.String()
+
+			fmt.Printf("Found other context values that can be used for %#v.\n", nodeStr)
+			v.PrintPossibleContext()
 
 			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Replace current context with earlier context? (y/n)\n  => ")
+			fmt.Print("  Replace this context? (y/n)\n  => ")
 			text, _ := reader.ReadString('\n')
 
 			if text == "y\n" {
-				//TODO: Allow users to choose which context to change to
+				fmt.Print("  Which context to replace with?\n  => ")
+				text, err := reader.ReadString('\n')
+				if err != nil {
+					fmt.Printf("  error when trying to process input: %v\n", err)
+					os.Exit(1)
+				}
+
+				text = strings.Replace(text, "\n", "", -1)
+				repIdx, err := strconv.ParseInt(text, 10, 0)
+				if err != nil {
+					fmt.Println("  error when converting %v to number. err: %v", text, err)
+					os.Exit(1)
+				}
+				if repIdx < 0 || int(repIdx) >= len(v.contexts) {
+					fmt.Printf("  Invalid replacement index of %v provided\n", idx)
+					os.Exit(1)
+				}
+
+				fmt.Printf("Len: %v\n", len(v.contexts))
 				//TODO: Just replacing the args like this will result in <args>,\n being printed
 				//      instead of just <arg>). Need to find out why and do it properly
-				args[idx] = v.contexts[len(v.contexts)-1]
+				args[idx] = v.contexts[repIdx].ident
 			}
 		}
 	}
@@ -247,13 +325,12 @@ func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
 	var pkgStr string
 	switch identInfo.(type) {
 	case *types.PkgName:
-		contextPkg := identInfo.Parent().Lookup("context")
+		contextPkg := identInfo.Parent().Lookup(ident.Name)
 		contextPkgName := contextPkg.(*types.PkgName)
 
 		pkgStr = contextPkgName.Imported().Path()
 	case *types.Var:
 		// This can be either a definition or use of an existing definition
-
 		def := v.info.Defs[ident]
 		if def != nil {
 			// A plain string check is not ideal but it is the easiest
