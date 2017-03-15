@@ -5,16 +5,22 @@ package main
 import (
 	"fmt"
 	"go/ast"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"log"
+	"os"
 	"strings"
 )
 
 func main() {
-	path := "/Users/ryanlaw/go/src/github.com/myteksi/go/dispatcher/grab-id/logic/recovery"
+	//path := "/Users/ryanlaw/go/src/github.com/myteksi/go/dispatcher/grab-id/logic/login"
+
+	if len(os.Args) != 2 {
+		fmt.Println("Usage: context_propagator.go <full package path>")
+		os.Exit(1)
+	}
+	path := os.Args[1]
 
 	fset := token.NewFileSet()
 
@@ -26,29 +32,18 @@ func main() {
 
 	astf := make([]*ast.File, 0)
 	for _, pkg := range pkgs {
-		fmt.Printf("package %v\n", pkg.Name)
+		fmt.Printf("Processing Package %v\n", pkg.Name)
 		for _, f := range pkg.Files {
 			//fmt.Printf("file %v\n", fp)
 			astf = append(astf, f)
 		}
 	}
 
-	config := &types.Config{
-		Error: func(err error) {
-			fmt.Printf("Type check error: %v\n", err)
-		},
-		Importer: importer.Default(),
-	}
 	info := types.Info{
 		Types: make(map[ast.Expr]types.TypeAndValue),
 		Defs:  make(map[*ast.Ident]types.Object),
 		Uses:  make(map[*ast.Ident]types.Object),
 	}
-	pkg, err := config.Check(path, fset, astf, &info)
-	if e != nil {
-		fmt.Printf("types.Config.Check error: %v\n", err)
-	}
-	fmt.Printf("types.Config.Check got %v\n", pkg.String())
 
 	for _, f := range astf {
 		fileName := fset.Position(f.Pos()).Filename
@@ -57,7 +52,13 @@ func main() {
 		if strings.HasSuffix(fileName, "_test.go") {
 			continue
 		}
-		fmt.Printf("File: %v\n")
+
+		// Skip all mock files
+		if strings.HasPrefix(fileName, "mock") && strings.HasSuffix(fileName, "mock.go") {
+			continue
+		}
+
+		fmt.Printf("Processing File: %v\n", fileName)
 
 		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
 
@@ -85,11 +86,12 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				case *ast.FuncDecl:
 					funcDecl := declNode.(*ast.FuncDecl)
 
-					funcDeclT := v.info.ObjectOf(funcDecl.Name)
-					fmt.Printf("funcDecl: %v \n", funcDeclT)
-
 					v.hasContextParam(funcDecl.Type.Params.List)
-					printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
+
+					//funcDeclT := v.info.ObjectOf(funcDecl.Name)
+					//fmt.Printf("funcDecl: %v \n", funcDeclT)
+
+					//printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
 
 				case *ast.GenDecl:
 					genDeclNode := declNode.(*ast.GenDecl)
@@ -112,11 +114,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					}
 
 					// To print out the function signature
-					genDeclT := v.info.TypeOf(val)
-					fmt.Printf("genDecl: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
+					//genDeclT := v.info.TypeOf(val)
+					//fmt.Printf("genDecl: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
 
 					v.hasContextParam(funcLit.Type.Params.List)
-					printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
+					//printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
 				}
 			}
 
@@ -128,11 +130,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				break
 			}
 
-			fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
-			fmt.Printf("  Processing RHS\n")
+			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
+			//fmt.Printf("  Processing RHS\n")
 			v.assignStmtRHS(assignStmt.Rhs)
 
-			fmt.Printf("  Processing LHS\n")
+			//fmt.Printf("  Processing LHS\n")
 			v.assignStmtLHS(assignStmt.Lhs)
 		}
 	}
@@ -142,7 +144,12 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 // Process LHS to see if a new context is created
 func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) {
 	for _, lhs := range assignStmtLHS {
-		lhsIdent := lhs.(*ast.Ident)
+		lhsIdent, ok := lhs.(*ast.Ident)
+		// context should not be embedded
+		// IMPROVE: Maybe allow it to be
+		if !ok {
+			continue
+		}
 
 		matched := v.isNetContextType(lhsIdent)
 		if matched {
@@ -176,12 +183,12 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 		}
 
 		xIdent := selectorExpr.X.(*ast.Ident)
-		selIdent := selectorExpr.Sel
-
 		matched := v.isNetContextType(xIdent)
 		if matched {
 			v.contexts = append(v.contexts, p.Names[0])
-			fmt.Printf(" Context Param Type: %v %v\n", p.Names[0], selIdent)
+
+			// selIdent := selectorExpr.Sel
+			// fmt.Printf(" Context Param Type: %v %v\n", p.Names[0], selIdent)
 		}
 	}
 }
