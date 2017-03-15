@@ -3,9 +3,13 @@ package main
 //credits: https://gist.github.com/cxwangyi/e1887879dcaa750e5469
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"log"
@@ -37,10 +41,18 @@ func main() {
 		}
 	}
 
+	config := &types.Config{
+		Error:    func(err error) {},
+		Importer: importer.Default(),
+	}
 	info := types.Info{
 		Types: make(map[ast.Expr]types.TypeAndValue),
 		Defs:  make(map[*ast.Ident]types.Object),
 		Uses:  make(map[*ast.Ident]types.Object),
+	}
+	_, err := config.Check(path, fset, astf, &info)
+	if err != nil {
+		fmt.Printf("types.Config.Check error: %v\n", err)
 	}
 
 	for _, f := range astf {
@@ -60,9 +72,10 @@ func main() {
 
 		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
 
-		//var buf bytes.Buffer
-		//printer.Fprint(&buf, fset, f)
-		//fmt.Println(buf.String())
+		// TODO: Output to file and replace original file
+		var buf bytes.Buffer
+		printer.Fprint(&buf, fset, f)
+		fmt.Println(buf.String())
 		//ast.Print(fset, f)
 	}
 }
@@ -128,7 +141,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				break
 			}
 
-			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
+			fmt.Printf(" Processing AssignStmt: %v\n", assignStmt)
 			//fmt.Printf("  Processing RHS\n")
 			v.assignStmtRHS(assignStmt.Rhs)
 
@@ -194,18 +207,14 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) {
 // Check if a context type is part of the argument to the function call
 // TODO: Handle AssignStmt can be nested inside another AssignStmt
 func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
-	for _, a := range args {
+	for idx, a := range args {
 
 		var ident *ast.Ident
 		switch a.(type) {
 		case *ast.CallExpr:
 			aCallExpr := a.(*ast.CallExpr)
 
-			selectorExpr, ok := aCallExpr.Fun.(*ast.SelectorExpr)
-			// All context params are selectorExpr
-			if !ok {
-				continue
-			}
+			selectorExpr, _ := aCallExpr.Fun.(*ast.SelectorExpr)
 
 			ident = selectorExpr.X.(*ast.Ident)
 		case *ast.Ident:
@@ -213,15 +222,23 @@ func (v *PrintASTVisitor) hasContextArg(args []ast.Expr) {
 		default:
 			continue
 		}
+		fmt.Printf(" ident: %v\n", ident)
 
 		matched := v.isNetContextType(ident)
 		if matched {
-			fmt.Printf("  Found other Context values in the same scope as %v. Other possible contexts %v\n", ident, v.contexts)
+			// TODO: Print out the whole line, otherwise it's hard to tell
+			fmt.Printf("  Found other Context values in the same scope as %#v. Other possible contexts %v\n", ident, v.contexts)
 
-			// Only perform replacement if this is a context.Background()
-			//if selIdent.Name == "Background" {
-			//	args[idx] = v.contexts[len(v.contexts)-1]
-			//}
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("Replace current context with earlier context? (y/n)\n  => ")
+			text, _ := reader.ReadString('\n')
+
+			if text == "y\n" {
+				//TODO: Allow users to choose which context to change to
+				//TODO: Just replacing the args like this will result in <args>,\n being printed
+				//      instead of just <arg>). Need to find out why and do it properly
+				args[idx] = v.contexts[len(v.contexts)-1]
+			}
 		}
 	}
 }
@@ -253,9 +270,15 @@ func (v *PrintASTVisitor) isNetContextType(ident *ast.Ident) bool {
 		}
 	}
 
-	matched := strings.HasSuffix(pkgStr, "golang.org/x/net/context")
+	if strings.HasSuffix(pkgStr, "golang.org/x/net/context") {
+		return true
 
-	return matched
+		// When it is a context.Context variable
+	} else if strings.HasSuffix(pkgStr, "golang.org/x/net/context.Context") {
+		return true
+	}
+
+	return false
 }
 
 func printParamsAndBody(params []*ast.Field, body []ast.Stmt) {
