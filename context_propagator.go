@@ -14,8 +14,6 @@ import (
 )
 
 func main() {
-	//path := "/Users/ryanlaw/go/src/github.com/myteksi/go/dispatcher/grab-id/logic/login"
-
 	if len(os.Args) != 2 {
 		fmt.Println("Usage: context_propagator.go <full package path>")
 		os.Exit(1)
