@@ -69,12 +69,43 @@ func main() {
 
 		fmt.Printf("Processing File: %v\n\n", fileName)
 
-		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
+		visitorNode := &PrintASTVisitor{tFSet: fset, astf: f, info: &info}
+		ast.Walk(visitorNode, f)
+
+		// If not modified, just skip the file writes
+		if !visitorNode.modified {
+			continue
+		}
 
 		// TODO: Output to file and replace original file
 		var buf bytes.Buffer
 		printer.Fprint(&buf, fset, f)
-		fmt.Println(buf.String())
+
+		tempFileName := fileName + ".tmp"
+		f, err := os.Create(tempFileName)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		_, err = f.WriteString(buf.String())
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		f.Sync()
+		f.Close()
+
+		tempFileName2 := fileName + ".tmp2"
+		err = os.Rename(fileName, tempFileName2)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		err = os.Rename(tempFileName, fileName)
+		if err != nil {
+			fmt.Println(err)
+		}
+
 		//ast.Print(fset, f)
 	}
 }
@@ -84,6 +115,7 @@ type PrintASTVisitor struct {
 	astf     *ast.File
 	info     *types.Info
 	contexts []*contextInfo
+	modified bool
 }
 
 type contextInfo struct {
@@ -183,10 +215,10 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmtStr)
 			//fmt.Printf("  Processing RHS\n")
-			v.assignStmtRHS(node, assignStmt.Rhs)
+			contextResultsAtRhs := v.assignStmtRHS(node, assignStmt.Rhs)
 
 			//fmt.Printf("  Processing LHS\n")
-			contextAtLhs := v.assignStmtLHS(assignStmt.Lhs)
+			contextAtLhs := v.assignStmtLHS(node, assignStmt.Lhs, contextResultsAtRhs)
 			for _, contextIdx := range contextAtLhs {
 				contextIdent := assignStmt.Lhs[contextIdx].(*ast.Ident)
 
@@ -202,7 +234,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 // Process LHS to see if a new context is created
 // returns the location of context in the expr list
-func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) []int {
+func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr, contextResultsAtRhs []int) []int {
 	contextAt := []int{}
 
 	for idx, lhs := range assignStmtLHS {
@@ -211,6 +243,38 @@ func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) []int {
 		// IMPROVE: Maybe allow it to be
 		if !ok {
 			continue
+		}
+
+		// If the context value is ignored, ask the users if
+		// they want to un-ignore it
+		if lhsIdent.Name == "_" {
+			for _, resultIdx := range contextResultsAtRhs {
+				if idx == resultIdx {
+					var buf bytes.Buffer
+					printer.Fprint(&buf, v.tFSet, node)
+					nodeStr := buf.String()
+
+					reader := bufio.NewReader(os.Stdin)
+					fmt.Printf("  Unignore returned context value at position '%v' ? %v (y/n)\n  => ", idx, nodeStr)
+					text, _ := reader.ReadString('\n')
+
+					if text == "y\n" {
+						fmt.Print("  what do you want to name it?\n  => ")
+						name, err := reader.ReadString('\n')
+						if err != nil {
+							fmt.Printf("  error when trying to process input: %v\n", err)
+							os.Exit(1)
+						}
+
+						name = strings.Replace(name, "\n", "", -1)
+
+						lhsIdent.Name = name
+
+						contextAt = append(contextAt, idx)
+						continue
+					}
+				}
+			}
 		}
 
 		matched := v.isNetContextType(lhsIdent)
@@ -223,14 +287,67 @@ func (v *PrintASTVisitor) assignStmtLHS(assignStmtLHS []ast.Expr) []int {
 }
 
 // Process RHS to see if context is used
-func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr) {
+func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr) []int {
 	// Only interested in Func calls
 	assignCallExpr, ok := assignStmtRHS[0].(*ast.CallExpr)
 	if !ok {
-		return
+		return nil
 	}
 
 	v.hasContextArg(node, assignCallExpr.Args)
+
+	contextAt := []int{}
+	// TODO: Refine checks so that context.CancelFunc is not considered context
+	// Check if the function call returns a context
+	selectorExpr, ok := assignCallExpr.Fun.(*ast.SelectorExpr)
+	if ok {
+		selectorObj := v.info.ObjectOf(selectorExpr.Sel)
+		selectorType := selectorObj.Type().(*types.Signature)
+		results := selectorType.Results()
+
+		for i := 0; i < results.Len(); i++ {
+			named, ok := results.At(i).Type().(*types.Named)
+			if ok {
+				pkgStr := named.Obj().Pkg().Path()
+				if strings.HasSuffix(pkgStr, "golang.org/x/net/context") {
+					contextAt = append(contextAt, i)
+
+					// When it is a context.Context variable
+				} else if strings.HasSuffix(pkgStr, "golang.org/x/net/context.Context") {
+					contextAt = append(contextAt, i)
+				}
+			}
+		}
+	}
+	identExpr, ok := assignCallExpr.Fun.(*ast.Ident)
+	if ok {
+		identObj := v.info.ObjectOf(identExpr)
+
+		identType := identObj.Type().(*types.Signature)
+		results := identType.Results()
+
+		for i := 0; i < results.Len(); i++ {
+			named, ok := results.At(i).Type().(*types.Named)
+			if ok {
+				pkg := named.Obj().Pkg()
+				if pkg == nil {
+					// this is not from an imported package, can't be net/context
+					continue
+				}
+
+				pkgStr := pkg.Path()
+				if strings.HasSuffix(pkgStr, "golang.org/x/net/context") {
+					contextAt = append(contextAt, i)
+
+					// When it is a context.Context variable
+				} else if strings.HasSuffix(pkgStr, "golang.org/x/net/context.Context") {
+					contextAt = append(contextAt, i)
+				}
+			}
+		}
+	}
+
+	return contextAt
 }
 
 // Check if a context.Context is passed in as a param
@@ -288,11 +405,11 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 			v.PrintPossibleContext()
 
 			reader := bufio.NewReader(os.Stdin)
-			fmt.Printf("  Replace this context arg? %v (y/n)\n  => ", nodeStr)
+			fmt.Printf(" Replace this context arg? %v (y/n)\n  => ", nodeStr)
 			text, _ := reader.ReadString('\n')
 
 			if text == "y\n" {
-				fmt.Print("  Which context to replace with?\n  => ")
+				fmt.Print(" Which context to replace with?\n  => ")
 				text, err := reader.ReadString('\n')
 				if err != nil {
 					fmt.Printf("  error when trying to process input: %v\n", err)
@@ -302,17 +419,19 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 				text = strings.Replace(text, "\n", "", -1)
 				repIdx, err := strconv.ParseInt(text, 10, 0)
 				if err != nil {
-					fmt.Println("  error when converting %v to number. err: %v", text, err)
+					fmt.Printf("  error when converting %v to number. err: %v", text, err)
 					os.Exit(1)
 				}
 				if repIdx < 0 || int(repIdx) >= len(v.contexts) {
-					fmt.Printf("  Invalid replacement index of %v provided\n", idx)
+					fmt.Printf("  invalid replacement index of %v provided\n", idx)
 					os.Exit(1)
 				}
 
 				//TODO: Just replacing the args like this will result in <args>,\n being printed
 				//      instead of just <arg>). Need to find out why and do it properly
 				args[idx] = v.contexts[repIdx].ident
+
+				v.modified = true
 			}
 
 			fmt.Println()
