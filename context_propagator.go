@@ -67,7 +67,7 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("Processing File: %v\n", fileName)
+		fmt.Printf("Processing File: %v\n\n", fileName)
 
 		ast.Walk(&PrintASTVisitor{tFSet: fset, astf: f, info: &info}, f)
 
@@ -94,8 +94,9 @@ type contextInfo struct {
 func (v *PrintASTVisitor) PrintPossibleContext() {
 	fmt.Println(" Earlier context values are:")
 	for idx, contextInfo := range v.contexts {
-		fmt.Printf("  %v:\n   %v =>\n    %v\n", idx, contextInfo.ident, contextInfo.foundAt)
+		fmt.Printf("  %v: %v => %v\n", idx, contextInfo.ident, contextInfo.foundAt)
 	}
+	fmt.Println()
 }
 
 func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
@@ -115,7 +116,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 					// TODO: Extract these to a method and reuse it
 					for _, contextAt := range contextAtParams {
-						foundAt := fmt.Sprintf("Parameter for %v\n", funcDecl.Name.String())
+						foundAt := fmt.Sprintf("Parameter for %v", funcDecl.Name.String())
 						v.contexts = append(v.contexts, &contextInfo{
 							ident:   contextAt,
 							foundAt: foundAt,
@@ -155,14 +156,13 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					//fmt.Printf("genDecl: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
 
 					contextAtParams := v.hasContextParam(funcLit.Type.Params.List)
-					var buf bytes.Buffer
-					printer.Fprint(&buf, v.tFSet, node)
-					genDeclStr := buf.String()
 
 					for _, contextAt := range contextAtParams {
+						foundAt := fmt.Sprintf("Parameter for %v", genDeclValueSpec.Names[0].String())
+
 						v.contexts = append(v.contexts, &contextInfo{
 							ident:   contextAt,
-							foundAt: genDeclStr,
+							foundAt: foundAt,
 						})
 					}
 					//printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
@@ -251,7 +251,7 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) []*ast.Ident {
 		xIdent := selectorExpr.X.(*ast.Ident)
 		matched := v.isNetContextType(xIdent)
 		if matched {
-			contexts = append(contexts, xIdent)
+			contexts = append(contexts, p.Names[0])
 			// selIdent := selectorExpr.Sel
 			// fmt.Printf(" Context Param Type: %v %v\n", p.Names[0], selIdent)
 		}
@@ -284,11 +284,11 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 			printer.Fprint(&buf, v.tFSet, node)
 			nodeStr := buf.String()
 
-			fmt.Printf("Found other context values that can be used for %#v.\n", nodeStr)
+			fmt.Printf("At: %#v.\n", nodeStr)
 			v.PrintPossibleContext()
 
 			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("  Replace this context? (y/n)\n  => ")
+			fmt.Printf("  Replace this context arg? %v (y/n)\n  => ", nodeStr)
 			text, _ := reader.ReadString('\n')
 
 			if text == "y\n" {
@@ -310,11 +310,12 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 					os.Exit(1)
 				}
 
-				fmt.Printf("Len: %v\n", len(v.contexts))
 				//TODO: Just replacing the args like this will result in <args>,\n being printed
 				//      instead of just <arg>). Need to find out why and do it properly
 				args[idx] = v.contexts[repIdx].ident
 			}
+
+			fmt.Println()
 		}
 	}
 }
