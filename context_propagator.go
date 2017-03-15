@@ -1,7 +1,5 @@
 package main
 
-//credits: https://gist.github.com/cxwangyi/e1887879dcaa750e5469
-
 import (
 	"bufio"
 	"bytes"
