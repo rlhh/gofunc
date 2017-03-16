@@ -25,7 +25,7 @@ func main() {
 
 	fset := token.NewFileSet()
 
-	pkgs, e := parser.ParseDir(fset, path, nil, 0)
+	pkgs, e := parser.ParseDir(fset, path, nil, parser.ParseComments)
 	if e != nil {
 		log.Fatal(e)
 		return
@@ -62,8 +62,11 @@ func main() {
 			continue
 		}
 
+		filePath := strings.SplitAfter(fileName, "/")
+		fileNameOnly := filePath[len(filePath)-1]
+
 		// Skip all mock files
-		if strings.HasPrefix(fileName, "mock") && strings.HasSuffix(fileName, "mock.go") {
+		if strings.HasPrefix(fileNameOnly, "mock_") || strings.HasSuffix(fileNameOnly, "mock.go") {
 			continue
 		}
 
@@ -155,15 +158,12 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 						})
 					}
 
-					//funcDeclT := v.info.ObjectOf(funcDecl.Name)
-					//fmt.Printf("funcDecl: %v \n", funcDeclT)
+					funcDeclT := v.info.ObjectOf(funcDecl.Name)
+					fmt.Printf("\nEntering: %v \n", funcDeclT)
 
 					//printParamsAndBody(funcDecl.Type.Params.List, funcDecl.Body.List)
 
 				case *ast.GenDecl:
-					// Entering new scope, reset context records
-					v.contexts = []*contextInfo{}
-
 					genDeclNode := declNode.(*ast.GenDecl)
 
 					// We are only interested if this is a var declaration (var * = func....)
@@ -183,9 +183,12 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 						break
 					}
 
+					// Entering new scope, reset context records
+					v.contexts = []*contextInfo{}
+
 					// To print out the function signature
-					//genDeclT := v.info.TypeOf(val)
-					//fmt.Printf("genDecl: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
+					genDeclT := v.info.TypeOf(val)
+					fmt.Printf("\nEntering: %v %v\n", genDeclValueSpec.Names[0], genDeclT.Underlying())
 
 					contextAtParams := v.hasContextParam(funcLit.Type.Params.List)
 
@@ -301,14 +304,33 @@ func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr)
 	// Check if the function call returns a context
 	selectorExpr, ok := assignCallExpr.Fun.(*ast.SelectorExpr)
 	if ok {
+
 		selectorObj := v.info.ObjectOf(selectorExpr.Sel)
-		selectorType := selectorObj.Type().(*types.Signature)
+
+		//TODO: Investigate why this happens
+		if selectorObj == nil {
+			fmt.Printf("Skipped: %v\n", selectorExpr)
+			return contextAt
+		}
+
+		selectorTypeObj := selectorObj.Type()
+		selectorType := selectorTypeObj.(*types.Signature)
 		results := selectorType.Results()
 
 		for i := 0; i < results.Len(); i++ {
 			named, ok := results.At(i).Type().(*types.Named)
 			if ok {
-				pkgStr := named.Obj().Pkg().Path()
+				pkg := named.Obj().Pkg()
+
+				// Investigate this. Happened during
+				// Replace this context arg? phoneObj, err := pn.model.LoadPhoneNumber(context.Background(), phoneNumber) (y/n)
+				// in grab-id/logic/login/phone_number.go
+				if pkg == nil {
+					// this is not from an imported package, can't be net/context
+					continue
+				}
+
+				pkgStr := pkg.Path()
 				if strings.HasSuffix(pkgStr, "golang.org/x/net/context") {
 					contextAt = append(contextAt, i)
 
@@ -386,7 +408,12 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 		case *ast.CallExpr:
 			aCallExpr := a.(*ast.CallExpr)
 
-			selectorExpr, _ := aCallExpr.Fun.(*ast.SelectorExpr)
+			selectorExpr, ok := aCallExpr.Fun.(*ast.SelectorExpr)
+			// Ignore if this is not a SelectorExpr as context values are either Idents or call
+			// to funcs in the context package
+			if !ok {
+				continue
+			}
 
 			ident = selectorExpr.X.(*ast.Ident)
 		case *ast.Ident:
