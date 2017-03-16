@@ -248,36 +248,39 @@ func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr,
 			continue
 		}
 
+		exitOuterLoop := false
 		// If the context value is ignored, ask the users if
 		// they want to un-ignore it
 		if lhsIdent.Name == "_" {
 			for _, resultIdx := range contextResultsAtRhs {
-				if idx == resultIdx {
-					var buf bytes.Buffer
-					printer.Fprint(&buf, v.tFSet, node)
-					nodeStr := buf.String()
+				if idx != resultIdx {
+					continue
+				}
 
-					reader := bufio.NewReader(os.Stdin)
-					fmt.Printf("  Unignore returned context value at position '%v' ? %v (y/n)\n  => ", idx, nodeStr)
-					text, _ := reader.ReadString('\n')
+				var buf bytes.Buffer
+				printer.Fprint(&buf, v.tFSet, node)
+				nodeStr := buf.String()
 
-					if text == "y\n" {
-						fmt.Print("  what do you want to name it?\n  => ")
-						name, err := reader.ReadString('\n')
-						if err != nil {
-							fmt.Printf("  error when trying to process input: %v\n", err)
-							os.Exit(1)
-						}
+				msg := fmt.Sprintf("  Unignore returned context value at position '%v' ? %v (y/n)\n  => ", idx, nodeStr)
+				text := checkInput(msg, map[string]int{"y": 0, "n": 1})
 
-						name = strings.Replace(name, "\n", "", -1)
+				if text == "y" {
+					msg := fmt.Sprint("  what do you want to name it?\n  => ")
+					name := getInput(msg)
 
-						lhsIdent.Name = name
+					name = strings.Replace(name, "\n", "", -1)
 
-						contextAt = append(contextAt, idx)
-						continue
-					}
+					lhsIdent.Name = name
+
+					contextAt = append(contextAt, idx)
+					exitOuterLoop = true
+					continue
 				}
 			}
+		}
+
+		if exitOuterLoop {
+			continue
 		}
 
 		matched := v.isNetContextType(lhsIdent)
@@ -431,26 +434,21 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 			fmt.Printf("At: %#v.\n", nodeStr)
 			v.PrintPossibleContext()
 
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Printf(" Replace this context arg? %v (y/n)\n  => ", nodeStr)
-			text, _ := reader.ReadString('\n')
+			msg := fmt.Sprintf(" Replace this context arg? %v (y/n)\n  => ", nodeStr)
+			text := checkInput(msg, map[string]int{"y": 0, "n": 1})
 
-			if text == "y\n" {
-				fmt.Print(" Which context to replace with?\n  => ")
-				text, err := reader.ReadString('\n')
-				if err != nil {
-					fmt.Printf("  error when trying to process input: %v\n", err)
-					os.Exit(1)
+			if text == "y" {
+				msg = fmt.Sprint(" Which context to replace with?\n  => ")
+
+				validInputs := make(map[string]int)
+				for idx, _ := range v.contexts {
+					validInputs[strconv.Itoa(idx)] = idx
 				}
+				text := checkInput(msg, validInputs)
 
-				text = strings.Replace(text, "\n", "", -1)
 				repIdx, err := strconv.ParseInt(text, 10, 0)
 				if err != nil {
 					fmt.Printf("  error when converting %v to number. err: %v", text, err)
-					os.Exit(1)
-				}
-				if repIdx < 0 || int(repIdx) >= len(v.contexts) {
-					fmt.Printf("  invalid replacement index of %v provided\n", idx)
 					os.Exit(1)
 				}
 
@@ -524,6 +522,29 @@ func printDetailedParams(genType types.Type) {
 		for i := 0; i < tuplesLen; i++ {
 			p := tuples.At(i)
 			fmt.Printf("  paramsDetailed: %v %v \n", p.Name(), p.Type())
+		}
+	}
+}
+
+func getInput(msg string) string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print(msg)
+
+	text, _ := reader.ReadString('\n')
+	text = strings.Replace(text, "\n", "", -1)
+
+	return text
+}
+
+func checkInput(msg string, validInputs map[string]int) string {
+	for {
+		input := getInput(msg)
+
+		_, exists := validInputs[input]
+		if exists {
+			return input
+		} else {
+			fmt.Printf("Invalid input %v, try again\n", input)
 		}
 	}
 }
