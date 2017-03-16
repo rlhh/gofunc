@@ -75,6 +75,7 @@ func main() {
 		visitorNode := &PrintASTVisitor{tFSet: fset, astf: f, info: &info}
 		ast.Walk(visitorNode, f)
 
+		//ast.Print(fset, f)
 		// If not modified, just skip the file writes
 		if !visitorNode.modified {
 			continue
@@ -108,8 +109,6 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
-
-		//ast.Print(fset, f)
 	}
 }
 
@@ -405,6 +404,11 @@ func (v *PrintASTVisitor) hasContextParam(params []*ast.Field) []*ast.Ident {
 // Check if a context type is part of the argument to the function call
 // TODO: Handle AssignStmt can be nested inside another AssignStmt
 func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
+	// No replacement possible, don't bother scanning
+	if len(v.contexts) == 0 {
+		return
+	}
+
 	for idx, a := range args {
 		var ident *ast.Ident
 		switch a.(type) {
@@ -454,7 +458,9 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 
 				//TODO: Just replacing the args like this will result in <args>,\n being printed
 				//      instead of just <arg>). Need to find out why and do it properly
-				args[idx] = v.contexts[repIdx].ident
+				//args[idx] = v.contexts[repIdx].ident
+
+				args[idx] = ast.NewIdent(v.contexts[repIdx].ident.Name)
 
 				v.modified = true
 			}
