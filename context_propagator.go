@@ -211,10 +211,6 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 				break
 			}
 
-			var buf bytes.Buffer
-			printer.Fprint(&buf, v.tFSet, node)
-			assignStmtStr := buf.String()
-
 			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmtStr)
 			//fmt.Printf("  Processing RHS\n")
 			contextResultsAtRhs := v.assignStmtRHS(node, assignStmt.Rhs)
@@ -223,6 +219,10 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 			contextAtLhs := v.assignStmtLHS(node, assignStmt.Lhs, contextResultsAtRhs)
 			for _, contextIdx := range contextAtLhs {
 				contextIdent := assignStmt.Lhs[contextIdx].(*ast.Ident)
+
+				var buf bytes.Buffer
+				printer.Fprint(&buf, v.tFSet, node)
+				assignStmtStr := buf.String()
 
 				v.contexts = append(v.contexts, &contextInfo{
 					ident:   contextIdent,
@@ -431,6 +431,13 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 
 		matched := v.isNetContextType(ident)
 		if matched {
+
+			// If there is only one replacement option and it is equal to
+			// the current value we're checking, skip.
+			if len(v.contexts) == 1 && v.contexts[0].ident.Name == ident.Name {
+				continue
+			}
+
 			var buf bytes.Buffer
 			printer.Fprint(&buf, v.tFSet, node)
 			nodeStr := buf.String()
@@ -455,10 +462,6 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 					fmt.Printf("  error when converting %v to number. err: %v", text, err)
 					os.Exit(1)
 				}
-
-				//TODO: Just replacing the args like this will result in <args>,\n being printed
-				//      instead of just <arg>). Need to find out why and do it properly
-				//args[idx] = v.contexts[repIdx].ident
 
 				args[idx] = ast.NewIdent(v.contexts[repIdx].ident.Name)
 
