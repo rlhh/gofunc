@@ -371,7 +371,13 @@ func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr)
 		}
 
 		selectorTypeObj := selectorObj.Type()
-		selectorType := selectorTypeObj.(*types.Signature)
+		selectorType, ok := selectorTypeObj.(*types.Signature)
+
+		// Skip if it is not a function call
+		if !ok {
+			return contextAt
+		}
+
 		results := selectorType.Results()
 
 		for i := 0; i < results.Len(); i++ {
@@ -477,7 +483,14 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 				continue
 			}
 
-			ident = selectorExpr.X.(*ast.Ident)
+			ident, ok = selectorExpr.X.(*ast.Ident)
+
+			// TODO: Handle double function calls
+			// example: time.Now().UTC()
+			if !ok {
+				continue
+			}
+
 		case *ast.Ident:
 			ident = a.(*ast.Ident)
 		default:
