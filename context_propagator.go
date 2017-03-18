@@ -12,6 +12,7 @@ import (
 	"go/types"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -75,13 +76,16 @@ func main() {
 		visitorNode := &PrintASTVisitor{tFSet: fset, astf: f, info: &info}
 		ast.Walk(visitorNode, f)
 
+		// Make sure to cleanup/reset the last function that's checked
+		// TODO: This probably can be cleaner
+		visitorNode.resetContexts()
+
 		//ast.Print(fset, f)
 		// If not modified, just skip the file writes
 		if !visitorNode.modified {
 			continue
 		}
 
-		// TODO: Output to file and replace original file
 		var buf bytes.Buffer
 		printer.Fprint(&buf, fset, f)
 
@@ -109,6 +113,11 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
+
+		err = os.Remove(tempFileName2)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 }
 
@@ -122,7 +131,13 @@ type PrintASTVisitor struct {
 
 type contextInfo struct {
 	ident   *ast.Ident
+	node    ast.Node
 	foundAt string
+
+	// This is added to allow reverting of unignores if it is not used
+	// Probably can be done in a separate struct
+	used         bool
+	originalName string
 }
 
 func (v *PrintASTVisitor) PrintPossibleContext() {
@@ -133,6 +148,17 @@ func (v *PrintASTVisitor) PrintPossibleContext() {
 	fmt.Println()
 }
 
+// Reset contexts and cleanup unused contexts
+func (v *PrintASTVisitor) resetContexts() {
+	for _, contextInfo := range v.contexts {
+		if !contextInfo.used {
+			contextInfo.ident.Name = contextInfo.originalName
+		}
+	}
+
+	v.contexts = []*contextInfo{}
+}
+
 func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 	if node != nil {
 		switch node.(type) {
@@ -141,8 +167,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 			if declNode != nil {
 				switch declNode.(type) {
 				case *ast.FuncDecl:
-					// Entering new scope, reset context records
-					v.contexts = []*contextInfo{}
+					v.resetContexts()
 
 					funcDecl := declNode.(*ast.FuncDecl)
 
@@ -152,8 +177,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 					for _, contextAt := range contextAtParams {
 						foundAt := fmt.Sprintf("Parameter for %v", funcDecl.Name.String())
 						v.contexts = append(v.contexts, &contextInfo{
-							ident:   contextAt,
-							foundAt: foundAt,
+							ident:        contextAt,
+							foundAt:      foundAt,
+							node:         node,
+							used:         true,
+							originalName: contextAt.Name,
 						})
 					}
 
@@ -182,8 +210,7 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 						break
 					}
 
-					// Entering new scope, reset context records
-					v.contexts = []*contextInfo{}
+					v.resetContexts()
 
 					// To print out the function signature
 					genDeclT := v.info.TypeOf(val)
@@ -195,8 +222,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 						foundAt := fmt.Sprintf("Parameter for %v", genDeclValueSpec.Names[0].String())
 
 						v.contexts = append(v.contexts, &contextInfo{
-							ident:   contextAt,
-							foundAt: foundAt,
+							ident:        contextAt,
+							node:         node,
+							foundAt:      foundAt,
+							used:         true,
+							originalName: contextAt.Name,
 						})
 					}
 					//printParamsAndBody(funcLit.Type.Params.List, funcLit.Body.List)
@@ -205,29 +235,36 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 		case ast.Stmt:
 			astNode := node.(ast.Stmt)
-			// Only interested in AssignStmt
-			assignStmt, ok := astNode.(*ast.AssignStmt)
-			if !ok {
-				break
-			}
 
-			//fmt.Printf(" Processing AssignStmt: %v\n", assignStmtStr)
-			//fmt.Printf("  Processing RHS\n")
-			contextResultsAtRhs := v.assignStmtRHS(node, assignStmt.Rhs)
+			switch astNode.(type) {
+			case *ast.AssignStmt:
+				assignStmt := astNode.(*ast.AssignStmt)
 
-			//fmt.Printf("  Processing LHS\n")
-			contextAtLhs := v.assignStmtLHS(node, assignStmt.Lhs, contextResultsAtRhs)
-			for _, contextIdx := range contextAtLhs {
-				contextIdent := assignStmt.Lhs[contextIdx].(*ast.Ident)
+				//fmt.Printf(" Processing AssignStmt: %v\n", assignStmtStr)
+				//fmt.Printf("  Processing RHS\n")
+				contextResultsAtRhs := v.assignStmtRHS(node, assignStmt.Rhs)
 
-				var buf bytes.Buffer
-				printer.Fprint(&buf, v.tFSet, node)
-				assignStmtStr := buf.String()
+				//fmt.Printf("  Processing LHS\n")
+				contextAtLhs := v.assignStmtLHS(node, assignStmt.Lhs, contextResultsAtRhs)
+				for contextIdx, contextName := range contextAtLhs {
+					contextIdent := assignStmt.Lhs[contextIdx].(*ast.Ident)
 
-				v.contexts = append(v.contexts, &contextInfo{
-					ident:   contextIdent,
-					foundAt: assignStmtStr,
-				})
+					var buf bytes.Buffer
+					printer.Fprint(&buf, v.tFSet, node)
+					assignStmtStr := buf.String()
+
+					v.contexts = append(v.contexts, &contextInfo{
+						ident:        contextIdent,
+						foundAt:      assignStmtStr,
+						node:         node,
+						used:         false,
+						originalName: contextName,
+					})
+				}
+
+			case *ast.ReturnStmt:
+				returnStmt := astNode.(*ast.ReturnStmt)
+				_ = v.assignStmtRHS(node, returnStmt.Results)
 			}
 		}
 	}
@@ -236,8 +273,8 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 // Process LHS to see if a new context is created
 // returns the location of context in the expr list
-func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr, contextResultsAtRhs []int) []int {
-	contextAt := []int{}
+func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr, contextResultsAtRhs []int) map[int]string {
+	contextAt := map[int]string{}
 
 	for idx, lhs := range assignStmtLHS {
 		lhsIdent, ok := lhs.(*ast.Ident)
@@ -260,6 +297,15 @@ func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr,
 				printer.Fprint(&buf, v.tFSet, node)
 				nodeStr := buf.String()
 
+				// AUTOMATION: This is to attempt to automatically unignore tracer create child contexts
+				tracerCall, _ := regexp.MatchString("tracer.CreateSpanFromContext", nodeStr)
+				if tracerCall {
+					contextAt[idx] = lhsIdent.Name
+					lhsIdent.Name = "childCtx"
+					exitOuterLoop = true
+					continue
+				}
+
 				msg := fmt.Sprintf("  Unignore returned context value at position '%v' ? %v (y/n)\n  => ", idx, nodeStr)
 				text := checkInput(msg, map[string]int{"y": 0, "n": 1})
 
@@ -269,9 +315,10 @@ func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr,
 
 					name = strings.Replace(name, "\n", "", -1)
 
+					contextAt[idx] = lhsIdent.Name
+
 					lhsIdent.Name = name
 
-					contextAt = append(contextAt, idx)
 					exitOuterLoop = true
 					continue
 				}
@@ -284,13 +331,14 @@ func (v *PrintASTVisitor) assignStmtLHS(node ast.Node, assignStmtLHS []ast.Expr,
 
 		matched := v.isNetContextType(lhsIdent)
 		if matched {
-			contextAt = append(contextAt, idx)
+			contextAt[idx] = lhsIdent.Name
 		}
 	}
 
 	return contextAt
 }
 
+// TODO: Rename this, it is used by assignStmt and returnStmt
 // Process RHS to see if context is used
 func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr) []int {
 	// Only interested in Func calls
@@ -445,6 +493,17 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 			fmt.Printf("At: %#v.\n", nodeStr)
 			v.PrintPossibleContext()
 
+			// AUTOMATE TEST: Already replace context with the last seen context
+			if true {
+				lastContextIdx := len(v.contexts) - 1
+				args[idx] = ast.NewIdent(v.contexts[lastContextIdx].ident.Name)
+				v.contexts[lastContextIdx].used = true
+
+				v.modified = true
+
+				continue
+			}
+
 			msg := fmt.Sprintf(" Replace this context arg? %v (y/n)\n  => ", nodeStr)
 			text := checkInput(msg, map[string]int{"y": 0, "n": 1})
 
@@ -464,6 +523,7 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 				}
 
 				args[idx] = ast.NewIdent(v.contexts[repIdx].ident.Name)
+				v.contexts[repIdx].used = true
 
 				v.modified = true
 			}
