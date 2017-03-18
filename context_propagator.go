@@ -271,6 +271,11 @@ func (v *PrintASTVisitor) Visit(node ast.Node) ast.Visitor {
 
 			case *ast.ReturnStmt:
 				returnStmt := astNode.(*ast.ReturnStmt)
+				// Return statements might have no RHS
+				if len(returnStmt.Results) == 0 {
+					break
+				}
+
 				_ = v.assignStmtRHS(node, returnStmt.Results)
 			}
 		}
@@ -361,7 +366,6 @@ func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr)
 	// Check if the function call returns a context
 	selectorExpr, ok := assignCallExpr.Fun.(*ast.SelectorExpr)
 	if ok {
-
 		selectorObj := v.info.ObjectOf(selectorExpr.Sel)
 
 		//TODO: Investigate why this happens
@@ -408,7 +412,17 @@ func (v *PrintASTVisitor) assignStmtRHS(node ast.Node, assignStmtRHS []ast.Expr)
 	if ok {
 		identObj := v.info.ObjectOf(identExpr)
 
-		identType := identObj.Type().(*types.Signature)
+		identType, ok := identObj.Type().(*types.Signature)
+		if !ok {
+			switch identObj.(type) {
+			case *types.Builtin:
+				// like make/len/append
+			case *types.TypeName:
+				// like int/int64
+			}
+
+			return contextAt
+		}
 		results := identType.Results()
 
 		for i := 0; i < results.Len(); i++ {
@@ -484,7 +498,6 @@ func (v *PrintASTVisitor) hasContextArg(node ast.Node, args []ast.Expr) {
 			}
 
 			ident, ok = selectorExpr.X.(*ast.Ident)
-
 			// TODO: Handle double function calls
 			// example: time.Now().UTC()
 			if !ok {
