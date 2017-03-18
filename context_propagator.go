@@ -12,6 +12,7 @@ import (
 	"go/types"
 	"log"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -118,6 +119,12 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
+	}
+
+	// GoFmt Files
+	_, err = exec.Command("sh", "-c", fmt.Sprintf("gofmt -s -w %v", path)).Output()
+	if err != nil {
+		fmt.Println(err)
 	}
 }
 
