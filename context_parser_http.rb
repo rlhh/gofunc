@@ -28,24 +28,22 @@ def main
 
         # Get function name and name of http.Request parameter
         match_data = line.match(/func (\w*).* (\w*) \*http.Request/)
+
+        # Skip functions without http.Request parameter
+        # functions with more than 3 matches are ambiguous
         if match_data && match_data.length == 3
           func = match_data[1]
           http_req = match_data[2]
 
-          temp_file.puts "\tspan, _ := tracer.CreateSpanFromContext(#{http_req[2]}.Context(), logTag+\".#{func}\")
-\n\tdefer
-span
-.Finish()\n"
+          temp_file.puts "\tspan, _ := tracer.CreateSpanFromContext(#{http_req}.Context(), logTag+\".#{func}\")\n"
+          temp_file.puts "\tdefer span.Finish()\n"
 
           impacted_files << full_file_path
-        else
-          puts "Something went wrong with processing #{full_file_path}. Skipping file"
-          next
         end
       end
 
       temp_file.close
-      FileUtils.mv(temp_file.path, filename)
+      FileUtils.mv(temp_file.path, full_file_path)
       end
   end
 
