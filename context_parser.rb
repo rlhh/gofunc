@@ -1,4 +1,4 @@
-#require 'pry'
+# require 'pry'
 require 'tempfile'
 require 'fileutils'
 
@@ -18,14 +18,29 @@ def parse_grep_result(grep_result)
   data
 end
 
-def calculate_offset(text, func, line_offset)
-  match_data = text.match(func)
+def calculate_interface_offset(text, func, line_offset)
+  match_data = text.match("#{func}")
 
   if match_data
     offset_data = match_data.offset(0)
   end
 
-  offset_data[0] += line_offset
+  # Add one to offset the space
+  offset_data[0] += line_offset + 1
+  offset_data[1] += line_offset
+
+  offset_data
+end
+
+def calculate_function_offset(text, func, line_offset)
+  match_data = text.match("\s#{func}")
+
+  if match_data
+    offset_data = match_data.offset(0)
+  end
+
+  # Add one to offset the space
+  offset_data[0] += line_offset + 1
   offset_data[1] += line_offset
 
   offset_data
@@ -105,7 +120,7 @@ end
 def replace_line(filename, func, line_num)
   temp_file = Tempfile.new('temp_file')
   num = 0
-  scope = nil
+  scope = ""
   scope_line_num = 0
   incoming_context = nil
   child_context = nil
@@ -211,9 +226,9 @@ def main
 
   grep_str = ""
   if name_type == 'function'
-    grep_str = "\"func .* #{name}(\" -e \"var #{name} = func(\""
+    grep_str = "\"func .*#{name}(\" -e \"var #{name} = func(\""
   elsif name_type == 'interface'
-    grep_str = "^\\s#{name}("
+    grep_str = "\"^\\s#{name}(\""
   else
     puts "name_type not supported"
     exit
@@ -224,9 +239,9 @@ def main
   grep_results = parse_grep_result(grep)
   impacted_files = []
   # need to ask user to choose the right function
-  grep_results.each do |grep_result|
+  grep_results.each do |result|
     puts "Is this the correct #{name_type}? (y/n)"
-    puts "  #{grep_result[:line]} => #{grep_result[:text]}"
+    puts "  #{result[:line]} => #{result[:text]}"
     print "> (y/n) : "
     grep_confirmation = $stdin.gets.chomp
     puts
@@ -236,15 +251,21 @@ def main
       next
     end
 
-    result = grep_result
-    offset = calculate_offset(result[:text], name, result[:line_offset])
+    if name_type == 'function'
+      offset = calculate_function_offset(result[:text], name, result[:line_offset])
+    elsif name_type == 'interface'
+      offset = calculate_interface_offset(result[:text], name, result[:line_offset])
+    else
+      puts "name_type not supported"
+      exit
+    end
 
     #guru referrers user.go:#2072,#2080
     guru = `guru referrers #{filename}:##{offset[0]},##{offset[1]}`
     guru_results = parse_guru_result(guru)
 
     impacted_files << guru_results.collect {|result| result[:path]}
-    
+
     # This is the function itself
     first_guru_result = guru_results[0]
 
