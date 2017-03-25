@@ -87,7 +87,7 @@ def find_child_context(line)
   # Example:
   #   "childCtx := tracer.InsertSpanIntoContext(ctx, span)"
   #   "ctx, cancel = context.WithTimeout(context.Background(), timeout)"
-  line[/(.*[c|C]tx).*[=|:=]/, 1]
+  line[/( .*[c|C]tx).*[=|:=]/, 1]
 end
 
 def insert_context(line, func, context)
